@@ -1,5 +1,5 @@
 import { withEventDispatch } from 'sling-framework';
-import { isFunction, setAttr, setIn, mergeDeep } from 'sling-helpers';
+import { isFunction, setAttr, setIn, mergeDeep, isDeeplyEmpty } from 'sling-helpers';
 
 import {
   validateField,
@@ -25,24 +25,31 @@ export class Form extends withEventDispatch(HTMLElement) {
     this.handleClick = this.handleClick.bind(this);
 
     this.state = {
-      dirty: false,
       errors: {},
+      values: {},
+      touched: {},
       isValid: false,
+      dirty: false,
       isValidating: false,
       isSubmitting: false,
       submitCount: 0,
-      values: {},
-      touched: {},
     };
 
+    this.formLevelState = {};
+    this.fieldLevelState = {};
+
     onValidationStart(({ isValidating }) => {
-      if (this.state.isValidating !== isValidating) {
-        this.updateState('isValidating', isValidating);
-      }
+      this.updateState('isValidating', isValidating);
     });
 
-    onValidationComplete((result) => {
-      this.state = { ...this.state, ...result };
+    onValidationComplete(({ path, error, isValidating }) => {
+      this.updateState('isValidating', isValidating);
+
+      if (path) {
+        this.updateFieldLevelState(path, 'error', error);
+      } else {
+        this.updateFormLevelState('errors', error);
+      }
 
       if (this.state.isSubmitting && !this.state.isValidating) {
         if (this.state.isValid) {
@@ -77,21 +84,51 @@ export class Form extends withEventDispatch(HTMLElement) {
   }
 
   updateState(path, value) {
-    const resolvedPath = isFunction(path) ? path() : path;
-    this.state = setIn(this.state, resolvedPath, value);
+    this.state = setIn(this.state, path, value);
+  }
+
+  updateFieldLevelState(path, prop, value) {
+    this.fieldLevelState = {
+      ...this.fieldLevelState,
+      [path]: setIn(this.fieldLevelState[path], prop, value),
+    };
+    this.consolidateState();
+  }
+
+  updateFormLevelState(prop, value) {
+    this.formLevelState = { [prop]: value };
+    this.consolidateState();
+  }
+
+  consolidateState() {
+    let fieldsAndFormState = {};
+
+    fieldsAndFormState = Object
+      .entries(this.fieldLevelState)
+      .reduce((result, [key, value]) => ({
+        errors: setIn(result.errors, key, value.error),
+        values: setIn(result.values, key, value.value),
+        touched: setIn(result.touched, key, value.touched),
+      }), {});
+
+    fieldsAndFormState = mergeDeep(this.formLevelState, fieldsAndFormState);
+
+    this.state = {
+      ...this.state,
+      errors: fieldsAndFormState.errors,
+      values: fieldsAndFormState.values,
+      touched: fieldsAndFormState.touched,
+      isValid: isDeeplyEmpty(fieldsAndFormState.errors),
+    };
   }
 
   async initForm() {
-    const fieldValues = this.fields.reduce((result, field) => {
-      const fieldId = this.constructor.getFieldId(field);
-      return setIn(result, fieldId, field.value || '');
-    }, {});
-
-    const userValues = this.initialvalues;
-
     await Promise.resolve(); // this avoids a LitElement warning
 
-    this.updateState('values', mergeDeep(fieldValues, userValues));
+    this.fields.forEach((field) => {
+      const fieldId = this.constructor.getFieldId(field);
+      this.updateFieldLevelState(fieldId, 'value', field.value || '');
+    }, {});
   }
 
   static isFormField(target) {
@@ -198,7 +235,7 @@ export class Form extends withEventDispatch(HTMLElement) {
 
   touchField(field) {
     const fieldId = this.constructor.getFieldId(field);
-    this.updateState(`touched.${fieldId}`, true);
+    this.updateFieldLevelState(fieldId, 'touched', true);
   }
 
   submitForm() {
@@ -242,7 +279,7 @@ export class Form extends withEventDispatch(HTMLElement) {
   handleInput({ target: field }) {
     if (this.constructor.isFormField(field)) {
       const fieldId = this.constructor.getFieldId(field);
-      this.updateState(`values.${fieldId}`, field.value);
+      this.updateFieldLevelState(fieldId, 'value', field.value);
 
       if (!this.skipvalidationonchange) {
         this.validateFieldByElement(field);

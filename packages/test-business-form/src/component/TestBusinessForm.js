@@ -10,6 +10,11 @@ export const TestBusinessForm = Base => class extends Base {
     this.handleFormSubmitSucess = this.handleFormSubmitSucess.bind(this);
   }
 
+  connectedCallback() {
+    super.connectedCallback();
+    this.formElement = this.shadowRoot.querySelector('sling-form');
+  }
+
   static get properties() {
     return {
       form: {
